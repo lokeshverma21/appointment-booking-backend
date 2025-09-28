@@ -1,0 +1,365 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  // output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+//-----------------------------------
+
+enum UserRole {
+  CLIENT
+  SUPERADMIN
+}
+
+enum TenantUserRole {
+  OWNER
+  ADMIN
+  STAFF
+}
+
+enum AppointmentStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+  RESCHEDULED
+}
+
+enum AvailabilityType {
+  RECURRING
+  ONE_OFF
+}
+
+enum CalendarProvider {
+  GOOGLE
+  OUTLOOK
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+model Tenant {
+  id        String    @id @default(uuid())
+  name      String
+  slug      String    @unique
+  domain    String?
+  timezone  String    @default("UTC")
+  currency  String    @default("USD")
+  settings  Json?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  // relations
+  invites          Invite[]
+  tenantUsers      TenantUser[]
+  services         Service[]
+  staff            Staff[]
+  appointments     Appointment[]
+  locations        Location[]
+  subscriptions    Subscription[]
+  calendarSettings CalendarIntegration[]
+  payments         Payment[]
+  availabilities   Availability[]
+  timeOffs         TimeOff[]
+  notifications    Notification[]
+  auditLogs        AuditLog[]
+
+  @@index([slug])
+}
+
+model User {
+  id            String    @id @default(uuid())
+  name          String
+  email         String    @unique
+  password      String
+  avatar        String?
+  emailVerified Boolean   @default(false)
+  role          UserRole  @default(CLIENT) // global role only
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  tenantLinks        TenantUser[]
+  clientAppointments Appointment[]  @relation("ClientAppointments")
+  notifications      Notification[]
+  auditLogs          AuditLog[]
+  staffProfile       Staff?
+  refreshTokens      RefreshToken[]
+}
+
+model Invite {
+  id         String          @id @default(uuid())
+  tenant     Tenant          @relation(fields: [tenantId], references: [id])
+  tenantId   String
+  email      String
+  role       TenantUserRole  @default(STAFF)
+  token      String          @unique
+  createdBy  String?         // userId who created invite
+  expiresAt  DateTime
+  used       Boolean         @default(false)
+  createdAt  DateTime        @default(now())
+
+  @@index([tenantId])
+  @@index([email])
+}
+
+model RefreshToken {
+  id           String   @id @default(uuid())
+  user         User     @relation(fields: [userId], references: [id])
+  userId       String
+  tokenHash    String   @unique
+  replacedById String?  // if rotated, points to new token id
+  revoked      Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+
+  @@index([userId])
+}
+
+
+model TenantUser {
+  id          String         @id @default(uuid())
+  tenant      Tenant         @relation(fields: [tenantId], references: [id])
+  tenantId    String
+  user        User           @relation(fields: [userId], references: [id])
+  userId      String
+  role        TenantUserRole @default(STAFF)
+  permissions String[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@unique([tenantId, userId])
+  @@index([tenantId])
+  @@index([userId])
+}
+
+model Service {
+  id          String    @id @default(uuid())
+  tenant      Tenant    @relation(fields: [tenantId], references: [id])
+  tenantId    String
+  title       String
+  description String?
+  duration    Int // minutes
+  price       Float
+  currency    String
+  active      Boolean   @default(true)
+  meta        Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  staffServices StaffService[]
+  appointments  Appointment[]
+
+  @@index([tenantId])
+}
+
+model Staff {
+  id        String    @id @default(uuid())
+  tenant    Tenant    @relation(fields: [tenantId], references: [id])
+  tenantId  String
+  user      User?     @relation(fields: [userId], references: [id])
+  userId    String?   @unique
+  name      String
+  bio       String?
+  avatar    String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  staffServices        StaffService[]
+  calendarIntegrations CalendarIntegration[]
+  availabilities       Availability[]
+  timeOffs             TimeOff[]
+  appointments         Appointment[]         @relation("StaffAppointments")
+
+  @@index([tenantId])
+}
+
+model StaffService {
+  staff     Staff   @relation(fields: [staffId], references: [id])
+  staffId   String
+  service   Service @relation(fields: [serviceId], references: [id])
+  serviceId String
+
+  @@id([staffId, serviceId])
+  @@index([serviceId])
+}
+
+model Appointment {
+  id         String            @id @default(uuid())
+  tenant     Tenant            @relation(fields: [tenantId], references: [id])
+  tenantId   String
+  service    Service           @relation(fields: [serviceId], references: [id])
+  serviceId  String
+  staff      Staff             @relation("StaffAppointments", fields: [staffId], references: [id])
+  staffId    String
+  client     User              @relation("ClientAppointments", fields: [clientId], references: [id])
+  clientId   String
+  start      DateTime
+  end        DateTime
+  status     AppointmentStatus @default(PENDING)
+  price      Float
+  currency   String
+  notes      String?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  canceledAt DateTime?
+  payment    Payment?
+
+  @@index([tenantId, start])
+  @@index([staffId, start])
+  @@index([clientId])
+}
+
+model Availability {
+  id        String           @id @default(uuid())
+  tenant    Tenant           @relation(fields: [tenantId], references: [id])
+  tenantId  String
+  staff     Staff            @relation(fields: [staffId], references: [id])
+  staffId   String
+  type      AvailabilityType
+  // For recurring rules:
+  dayOfWeek Int? // 0 = Sunday ... 6 = Saturday
+  startTime String? // "09:00"
+  endTime   String? // "17:00"
+  // For one-off:
+  startDate DateTime?
+  endDate   DateTime?
+  meta      Json?
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  deletedAt DateTime?
+
+  @@index([tenantId])
+  @@index([staffId])
+}
+
+model TimeOff {
+  id        String   @id @default(uuid())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId  String
+  staff     Staff    @relation(fields: [staffId], references: [id])
+  staffId   String
+  start     DateTime
+  end       DateTime
+  reason    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([staffId])
+}
+
+model CalendarIntegration {
+  id          String           @id @default(uuid())
+  tenant      Tenant           @relation(fields: [tenantId], references: [id])
+  tenantId    String
+  staff       Staff?           @relation(fields: [staffId], references: [id])
+  staffId     String?
+  provider    CalendarProvider
+  credentials Json // tokens, refresh tokens
+  enabled     Boolean          @default(false)
+  lastSync    DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([tenantId])
+}
+
+model Notification {
+  id        String    @id @default(uuid())
+  tenant    Tenant    @relation(fields: [tenantId], references: [id])
+  tenantId  String
+  user      User?     @relation(fields: [userId], references: [id])
+  userId    String?
+  type      String // "booking_confirmation", "reminder", etc.
+  channel   String // "email", "sms", "push"
+  payload   Json
+  status    String // "queued", "sent", "failed"
+  sentAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([tenantId])
+  @@index([userId])
+}
+
+model Payment {
+  id            String        @id @default(uuid())
+  tenant        Tenant        @relation(fields: [tenantId], references: [id])
+  tenantId      String
+  appointment   Appointment?  @relation(fields: [appointmentId], references: [id])
+  appointmentId String?       @unique
+  amount        Float
+  currency      String
+  gateway       String
+  gatewayTxId   String?
+  status        PaymentStatus @default(PENDING)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([tenantId])
+  @@index([appointmentId])
+}
+
+model Subscription {
+  id        String    @id @default(uuid())
+  tenant    Tenant    @relation(fields: [tenantId], references: [id])
+  tenantId  String
+  plan      String
+  status    String
+  startsAt  DateTime
+  endsAt    DateTime?
+  meta      Json?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([tenantId])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id])
+  tenantId  String?
+  user      User?    @relation(fields: [userId], references: [id])
+  userId    String?
+  action    String
+  resource  String
+  before    Json?
+  after     Json?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([userId])
+}
+
+model Location {
+  id        String   @id @default(uuid())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId  String
+  name      String
+  address   String?
+  lat       Float?
+  lon       Float?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+}
