@@ -24,8 +24,12 @@ app.use(cookieParser());
 
 //routers
 import authRouter from "./modules/auth/auth.routes.js";
+import serviceRouter from "./modules/service/service.routes.js";
+import staffRouter from "./modules/staff/staff.routes.js";
 
 app.use("/api/v1/auth", authRouter)
+app.use("/api/v1/service", serviceRouter)
+app.use("/api/v1/staff", staffRouter)
 
 
 // Middleware for handling 404 errors
